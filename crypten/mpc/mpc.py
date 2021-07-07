@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from functools import wraps
 
 import torch
+from torch import Tensor
 from crypten import communicator as comm
 from crypten.common.tensor_types import is_tensor
+import crypten.common.approximations as approximations
 from crypten.common.util import (
     ConfigBase,
     adaptive_pool2d_helper,
@@ -109,7 +111,7 @@ class ConfigManager(ConfigBase):
 
 
 class MPCTensor(CrypTensor):
-    def __init__(self, tensor, ptype=Ptype.arithmetic, device=None, *args, **kwargs):
+    def __new__(cls, tensor, ptype=Ptype.arithmetic, device=None, *args, **kwargs):
         """
         Creates the shared tensor from the input `tensor` provided by party `src`.
         The `ptype` defines the type of sharing used (default: arithmetic).
@@ -136,7 +138,12 @@ class MPCTensor(CrypTensor):
         requires_grad = kwargs.pop("requires_grad", default)
 
         # call CrypTensor constructor:
-        super().__init__(requires_grad=requires_grad)
+        if isinstance(tensor, torch.Tensor):
+            meta = tensor.to('meta')
+        else:
+            meta = torch.empty(0, device='meta')
+        self = cls._make_subclass(cls, meta, requires_grad)
+
         if device is None and hasattr(tensor, "device"):
             device = tensor.device
 
@@ -147,6 +154,30 @@ class MPCTensor(CrypTensor):
         else:
             self._tensor = tensor_type(tensor=tensor, device=device, *args, **kwargs)
         self.ptype = ptype
+
+        return self
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        name = func.__name__
+        A = torch.ops.aten
+        if name in OOP_BINARY_FUNCTIONS:
+            preferred = OOP_BINARY_FUNCTIONS[name]
+
+            def ob_wrapper_function(self, value, *args, **kwargs):
+                result = self.shallow_copy()
+                if isinstance(value, MPCTensor):
+                    value = value._tensor
+                result._tensor = getattr(result._tensor, name)(value, *args, **kwargs)
+                return result
+
+            return mode(preferred, False)(ob_wrapper_function)(*args, **kwargs)
+        elif func is A.cat:
+            return MPCTensor.cat(*args, **kwargs)
+        elif len(args) > 0 and isinstance(args[0], MPCTensor) and hasattr(args[0], name) and getattr(MPCTensor, name) is not getattr(Tensor, name):
+            return getattr(args[0], name)(*args[1:], **kwargs)
+        else:
+            raise NotImplementedError(f"{func.__name__} not supported")
 
     @staticmethod
     def new(*args, **kwargs):

@@ -27,9 +27,9 @@ from .cryptensor import CrypTensor
 
 
 # functions controlling autograd:
-no_grad = CrypTensor.no_grad
-enable_grad = CrypTensor.enable_grad
-set_grad_enabled = CrypTensor.set_grad_enabled
+no_grad = torch.no_grad
+enable_grad = torch.enable_grad
+set_grad_enabled = torch.set_grad_enabled
 
 # Setup RNG generators
 generators = {
