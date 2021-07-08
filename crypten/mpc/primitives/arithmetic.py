@@ -104,7 +104,9 @@ class ArithmeticSharedTensor(object):
         assert str(device) != 'meta'
         assert str(tensor.device) != 'meta'
         self.share = ArithmeticSharedTensor.PRZS(size, device=device).share
+        assert type(self.share) == torch.Tensor
         if self.rank == src:
+            assert type(tensor) == torch.Tensor
             self.share += tensor
 
     @staticmethod
