@@ -139,13 +139,15 @@ class MPCTensor(CrypTensor):
 
         # call CrypTensor constructor:
         if isinstance(tensor, torch.Tensor):
-            meta = tensor.to('meta')
+            meta = torch.empty(tensor.size(), device='meta')
         else:
             meta = torch.empty(0, device='meta')
         self = cls._make_subclass(cls, meta, requires_grad)
 
         if device is None and hasattr(tensor, "device"):
             device = tensor.device
+
+        assert str(device) != 'meta'
 
         # create the MPCTensor:
         tensor_type = ptype.to_tensor()
@@ -157,16 +159,29 @@ class MPCTensor(CrypTensor):
 
         return self
 
+    @property
+    def _tensor(self):
+        assert str(self.__tensor.device) != 'meta', (self._orig_tensor, self.__tensor)
+        return self.__tensor
+
+    @_tensor.setter
+    def _tensor(self, t):
+        assert str(t.device) != 'meta', self._orig_tensor
+        self.__tensor = t
+
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         name = func.__name__
         A = torch.ops.aten
         if func is A.cat:
             return MPCTensor.cat(*args, **kwargs)
+        elif func is A.detach:
+            # TODO: wut
+            return args[0].clone()
         elif len(args) > 0 and isinstance(args[0], MPCTensor) and hasattr(args[0], name) and getattr(MPCTensor, name) is not getattr(Tensor, name):
             return getattr(args[0], name)(*args[1:], **kwargs)
         else:
-            raise NotImplementedError(f"{func.__name__} not supported")
+            raise NotImplementedError(f"{func.__name__} not supported {args}")
 
     @staticmethod
     def new(*args, **kwargs):

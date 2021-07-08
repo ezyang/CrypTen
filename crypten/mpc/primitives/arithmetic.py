@@ -101,6 +101,8 @@ class ArithmeticSharedTensor(object):
             size = comm.get().broadcast_obj(size, src)
 
         # generate pseudo-random zero sharing (PRZS) and add source's tensor:
+        assert str(device) != 'meta'
+        assert str(tensor.device) != 'meta'
         self.share = ArithmeticSharedTensor.PRZS(size, device=device).share
         if self.rank == src:
             self.share += tensor
@@ -145,6 +147,7 @@ class ArithmeticSharedTensor(object):
     @share.setter
     def share(self, value):
         """Sets _tensor to value"""
+        assert str(value.device) != 'meta'
         self._tensor = value
 
     @staticmethod

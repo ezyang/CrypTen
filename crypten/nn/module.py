@@ -1884,11 +1884,7 @@ class Conv(Module):
         }
 
         # identify correct convolution function to use:
-        if torch.is_tensor(x):
-            func = getattr(torch.nn.functional, f"conv{dim}d", None)
-            args = [x] + args + bias  # torch function takes different inputs
-        else:
-            func = getattr(x, f"conv{dim}d", None)
+        func = getattr(x, f"conv{dim}d", None)
 
         # perform the convolution:
         x = func(*args, **kwargs)
