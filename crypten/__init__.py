@@ -437,7 +437,7 @@ def cat(tensors, dim=0):
     """
     assert isinstance(tensors, list), "input to cat must be a list"
     if all(torch.is_tensor(t) for t in tensors):
-        return torch.cat(tensors)
+        return torch.cat(tensors, dim=dim)
 
     assert all(isinstance(t, CrypTensor) for t in tensors), "inputs must be CrypTensors"
     tensor_types = [get_cryptensor_type(t) for t in tensors]

@@ -161,18 +161,7 @@ class MPCTensor(CrypTensor):
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         name = func.__name__
         A = torch.ops.aten
-        if name in OOP_BINARY_FUNCTIONS:
-            preferred = OOP_BINARY_FUNCTIONS[name]
-
-            def ob_wrapper_function(self, value, *args, **kwargs):
-                result = self.shallow_copy()
-                if isinstance(value, MPCTensor):
-                    value = value._tensor
-                result._tensor = getattr(result._tensor, name)(value, *args, **kwargs)
-                return result
-
-            return mode(preferred, False)(ob_wrapper_function)(*args, **kwargs)
-        elif func is A.cat:
+        if func is A.cat:
             return MPCTensor.cat(*args, **kwargs)
         elif len(args) > 0 and isinstance(args[0], MPCTensor) and hasattr(args[0], name) and getattr(MPCTensor, name) is not getattr(Tensor, name):
             return getattr(args[0], name)(*args[1:], **kwargs)
