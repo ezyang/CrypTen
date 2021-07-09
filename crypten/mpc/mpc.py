@@ -29,6 +29,16 @@ from .max_helper import _argmax_helper, _max_helper_all_tree_reductions
 from .primitives.binary import BinarySharedTensor
 from .primitives.converters import convert
 from .ptype import ptype as Ptype
+import contextlib
+
+
+@contextlib.contextmanager
+def no_dispatch():
+    guard = torch._C._DisableTorchDispatch()
+    try:
+        yield
+    finally:
+        del guard
 
 
 def mode(ptype, inplace=False):
@@ -132,16 +142,14 @@ class MPCTensor(CrypTensor):
         """
         if tensor is None:
             raise ValueError("Cannot initialize tensor with None.")
+        assert tensor != [], "need accurate size on initial construction"
 
         # take required_grad from kwargs, input tensor, or set to False:
         default = tensor.requires_grad if torch.is_tensor(tensor) else False
         requires_grad = kwargs.pop("requires_grad", default)
 
         # call CrypTensor constructor:
-        if isinstance(tensor, torch.Tensor):
-            meta = torch.empty(tensor.size(), device='meta')
-        else:
-            meta = torch.empty(0, device='meta')
+        meta = torch.empty(tensor.size(), device='meta')
         self = cls._make_subclass(cls, meta, requires_grad)
 
         if device is None and hasattr(tensor, "device"):
@@ -151,37 +159,34 @@ class MPCTensor(CrypTensor):
 
         # create the MPCTensor:
         tensor_type = ptype.to_tensor()
-        if tensor is []:
-            self._tensor = torch.tensor([], device=device)
+        if isinstance(tensor, tensor_type):
+            self._tensor = tensor
         else:
             self._tensor = tensor_type(tensor=tensor, device=device, *args, **kwargs)
+        assert self._tensor.size() == self.size()
         self.ptype = ptype
 
         return self
-
-    @property
-    def _tensor(self):
-        assert str(self.__tensor.device) != 'meta', (self._orig_tensor, self.__tensor)
-        return self.__tensor
-
-    @_tensor.setter
-    def _tensor(self, t):
-        assert str(t.device) != 'meta', self._orig_tensor
-        self.__tensor = t
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         name = func.__name__
         A = torch.ops.aten
+        print(f"{name}(...)")
         if func is A.cat:
             return MPCTensor.cat(*args, **kwargs)
+        elif func is A.ones_like:
+            self, dtype, layout, device, requires_grad, memory_format = args
+            return self.new(torch.ones_like(self.share))
         elif func is A.detach:
             # TODO: wut
             return args[0].clone()
-        elif len(args) > 0 and isinstance(args[0], MPCTensor) and hasattr(args[0], name) and getattr(MPCTensor, name) is not getattr(Tensor, name):
-            return getattr(args[0], name)(*args[1:], **kwargs)
+        elif len(args) > 0 and isinstance(args[0], MPCTensor) and hasattr(args[0], f'dispatch_{name}'):
+            return getattr(args[0], f"dispatch_{name}")(*args[1:], **kwargs)
+        elif len(args) > 0 and isinstance(args[0], MPCTensor) and hasattr(args[0], name) and getattr(args[0], name) is not getattr(torch.Tensor, name):
+            return getattr(args[0], f"{name}")(*args[1:], **kwargs)
         else:
-            raise NotImplementedError(f"{func.__name__} not supported {args}")
+            raise NotImplementedError(f"{func.__name__} not supported")
 
     @staticmethod
     def new(*args, **kwargs):
@@ -189,6 +194,15 @@ class MPCTensor(CrypTensor):
         Creates a new MPCTensor, passing all args and kwargs into the constructor.
         """
         return MPCTensor(*args, **kwargs)
+
+    @property
+    def _tensor(self):
+        return self.__tensor
+
+    @_tensor.setter
+    def _tensor(self, x):
+        assert x.size() == Tensor.size(self), f"{x.size()} != {Tensor.size(self)}"
+        self.__tensor = x
 
     @staticmethod
     def from_shares(share, precision=None, ptype=Ptype.arithmetic):
@@ -198,23 +212,19 @@ class MPCTensor(CrypTensor):
         result.ptype = ptype
         return result
 
-    def clone(self):
+    def dispatch_clone(self):
         """Create a deep copy of the input tensor."""
         # TODO: Rename this to __deepcopy__()?
-        result = MPCTensor([])
-        result._tensor = self._tensor.clone()
-        result.ptype = self.ptype
+        result = MPCTensor(self._tensor.clone(), ptype=self.ptype)
         return result
 
     def shallow_copy(self):
         """Create a shallow copy of the input tensor."""
         # TODO: Rename this to __copy__()?
-        result = MPCTensor([])
-        result._tensor = self._tensor
-        result.ptype = self.ptype
+        result = MPCTensor(self._tensor, ptype=self.ptype)
         return result
 
-    def copy_(self, other):
+    def dispatch_copy_(self, other):
         """Copies value of other MPCTensor into this MPCTensor."""
         assert isinstance(other, MPCTensor), "other must be MPCTensor"
         self._tensor.copy_(other._tensor)
@@ -840,6 +850,11 @@ class MPCTensor(CrypTensor):
 
         return self * condition + y_masked
 
+    def dispatch_mm(self, y):
+        print(self.size())
+        print(y.size())
+        return self.dispatch_matmul(y)
+
     @mode(Ptype.arithmetic)
     def div(self, y):
         r"""Divides each element of :attr:`self` with the scalar :attr:`y` or
@@ -893,6 +908,19 @@ class MPCTensor(CrypTensor):
         else:
             raise TypeError("index_add second tensor of unsupported type")
         return result
+
+    def dispatch_convolution_overrideable(self, *args, **kwargs):
+        weight, bias, stride, padding, dilation, transposed, output_padding, groups = args
+        assert bias is None
+        kwargs = {
+            "stride": stride,
+            "padding": padding,
+            "dilation": dilation,
+            "groups": groups,
+        }
+        assert transposed is False
+        assert output_padding == [0, 0], output_padding
+        return self.dispatch_conv2d(weight, **kwargs)
 
     def scatter_add(self, dim, index, other):
         """Adds all values from the tensor other into self at the indices
@@ -1015,9 +1043,9 @@ def _add_oop_unary_passthrough_function(name, preferred=None):
         return result
 
     if preferred is None:
-        setattr(MPCTensor, name, ou_wrapper_function)
+        setattr(MPCTensor, f'dispatch_{name}', ou_wrapper_function)
     else:
-        setattr(MPCTensor, name, mode(preferred, False)(ou_wrapper_function))
+        setattr(MPCTensor, f'dispatch_{name}', mode(preferred, False)(ou_wrapper_function))
 
 
 def _add_oop_binary_passthrough_function(name, preferred=None):
@@ -1029,9 +1057,9 @@ def _add_oop_binary_passthrough_function(name, preferred=None):
         return result
 
     if preferred is None:
-        setattr(MPCTensor, name, ob_wrapper_function)
+        setattr(MPCTensor, f'dispatch_{name}', ob_wrapper_function)
     else:
-        setattr(MPCTensor, name, mode(preferred, False)(ob_wrapper_function))
+        setattr(MPCTensor, f'dispatch_{name}', mode(preferred, False)(ob_wrapper_function))
 
 
 def _add_inplace_unary_passthrough_function(name, preferred=None):
@@ -1040,9 +1068,9 @@ def _add_inplace_unary_passthrough_function(name, preferred=None):
         return self
 
     if preferred is None:
-        setattr(MPCTensor, name, iu_wrapper_function)
+        setattr(MPCTensor, f'dispatch_{name}', iu_wrapper_function)
     else:
-        setattr(MPCTensor, name, mode(preferred, True)(iu_wrapper_function))
+        setattr(MPCTensor, f'dispatch_{name}', mode(preferred, True)(iu_wrapper_function))
 
 
 def _add_inplace_binary_passthrough_function(name, preferred=None):
@@ -1053,9 +1081,9 @@ def _add_inplace_binary_passthrough_function(name, preferred=None):
         return self
 
     if preferred is None:
-        setattr(MPCTensor, name, ib_wrapper_function)
+        setattr(MPCTensor, f'dispatch_{name}', ib_wrapper_function)
     else:
-        setattr(MPCTensor, name, mode(preferred, True)(ib_wrapper_function))
+        setattr(MPCTensor, f'dispatch_{name}', mode(preferred, True)(ib_wrapper_function))
 
 
 for func_name, preferred_type in OOP_UNARY_FUNCTIONS.items():

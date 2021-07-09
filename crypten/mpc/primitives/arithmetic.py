@@ -661,6 +661,9 @@ class ArithmeticSharedTensor(object):
 
     def dot(self, y, weights=None):
         """Compute a dot product between two tensors"""
+        if self.size() != y.size():
+            assert weights is None
+            return self.matmul(y)  # yoloooo
         assert self.size() == y.size(), "Number of elements do not match"
         if weights is not None:
             assert weights.size() == self.size(), "Incorrect number of weights"

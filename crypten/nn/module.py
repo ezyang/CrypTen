@@ -1742,6 +1742,8 @@ class Gemm(Module):
             a = a.t()
         if self.trans_b:
             b = b.t()
+        print(a.size())
+        print(b.size())
         output = a.matmul(b).mul(self.alpha)
         output = output.add(c.mul(self.beta))
         return output
@@ -1884,10 +1886,10 @@ class Conv(Module):
         }
 
         # identify correct convolution function to use:
-        func = getattr(x, f"conv{dim}d", None)
+        func = getattr(torch.nn.functional, f"conv{dim}d")
 
         # perform the convolution:
-        x = func(*args, **kwargs)
+        x = func(x, *args, **kwargs)
 
         # add the bias term if it is specified, and wasn;t already added:
         if not torch.is_tensor(x) and bias is not None:

@@ -188,14 +188,3 @@ class CrypTensor(torch.Tensor):
 # Register function approximations
 for func in approximations.__all__:
     setattr(CrypTensor, func, getattr(approximations, func))
-
-
-# Register regular functions
-for func in regular.__all__:
-    setattr(CrypTensor, func, getattr(regular, func))
-
-
-# Register base implementations from gradient functions
-for name, grad_fn in get_grad_fn_registry().items():
-    if hasattr(grad_fn, "base_impl"):
-        setattr(CrypTensor, name, grad_fn.base_impl)
