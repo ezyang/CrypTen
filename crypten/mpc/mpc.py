@@ -29,16 +29,6 @@ from .max_helper import _argmax_helper, _max_helper_all_tree_reductions
 from .primitives.binary import BinarySharedTensor
 from .primitives.converters import convert
 from .ptype import ptype as Ptype
-import contextlib
-
-
-@contextlib.contextmanager
-def no_dispatch():
-    guard = torch._C._DisableTorchDispatch()
-    try:
-        yield
-    finally:
-        del guard
 
 
 def mode(ptype, inplace=False):
@@ -142,14 +132,17 @@ class MPCTensor(CrypTensor):
         """
         if tensor is None:
             raise ValueError("Cannot initialize tensor with None.")
-        assert tensor != [], "need accurate size on initial construction"
 
         # take required_grad from kwargs, input tensor, or set to False:
         default = tensor.requires_grad if torch.is_tensor(tensor) else False
         requires_grad = kwargs.pop("requires_grad", default)
 
         # call CrypTensor constructor:
-        meta = torch.empty(tensor.size(), device='meta')
+        if isinstance(tensor, torch.Tensor):
+            meta = torch.empty(tensor.size(), device='meta')
+        else:
+            print(f"zero meta {tensor}")
+            meta = torch.empty(0, device='meta')
         self = cls._make_subclass(cls, meta, requires_grad)
 
         if device is None and hasattr(tensor, "device"):
@@ -159,11 +152,10 @@ class MPCTensor(CrypTensor):
 
         # create the MPCTensor:
         tensor_type = ptype.to_tensor()
-        if isinstance(tensor, tensor_type):
-            self._tensor = tensor
+        if tensor is []:
+            self._tensor = torch.tensor([], device=device)
         else:
             self._tensor = tensor_type(tensor=tensor, device=device, *args, **kwargs)
-        assert self._tensor.size() == self.size()
         self.ptype = ptype
 
         return self
@@ -177,6 +169,8 @@ class MPCTensor(CrypTensor):
             return MPCTensor.cat(*args, **kwargs)
         elif func is A.ones_like:
             self, dtype, layout, device, requires_grad, memory_format = args
+            # TODO
+            print(self.share.size())
             return self.new(torch.ones_like(self.share))
         elif func is A.detach:
             # TODO: wut
@@ -195,15 +189,6 @@ class MPCTensor(CrypTensor):
         """
         return MPCTensor(*args, **kwargs)
 
-    @property
-    def _tensor(self):
-        return self.__tensor
-
-    @_tensor.setter
-    def _tensor(self, x):
-        assert x.size() == Tensor.size(self), f"{x.size()} != {Tensor.size(self)}"
-        self.__tensor = x
-
     @staticmethod
     def from_shares(share, precision=None, ptype=Ptype.arithmetic):
         result = MPCTensor([])
@@ -215,13 +200,17 @@ class MPCTensor(CrypTensor):
     def dispatch_clone(self):
         """Create a deep copy of the input tensor."""
         # TODO: Rename this to __deepcopy__()?
-        result = MPCTensor(self._tensor.clone(), ptype=self.ptype)
+        result = MPCTensor([])
+        result._tensor = self._tensor.clone()
+        result.ptype = self.ptype
         return result
 
     def shallow_copy(self):
         """Create a shallow copy of the input tensor."""
         # TODO: Rename this to __copy__()?
-        result = MPCTensor(self._tensor, ptype=self.ptype)
+        result = MPCTensor([])
+        result._tensor = self._tensor
+        result.ptype = self.ptype
         return result
 
     def dispatch_copy_(self, other):
@@ -849,11 +838,6 @@ class MPCTensor(CrypTensor):
             y_masked = (1 - condition) * y
 
         return self * condition + y_masked
-
-    def dispatch_mm(self, y):
-        print(self.size())
-        print(y.size())
-        return self.dispatch_matmul(y)
 
     @mode(Ptype.arithmetic)
     def div(self, y):
