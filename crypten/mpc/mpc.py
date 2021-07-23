@@ -111,7 +111,7 @@ class ConfigManager(ConfigBase):
 
 
 class MPCTensor(CrypTensor):
-    def __new__(cls, tensor, ptype=Ptype.arithmetic, device=None, *args, **kwargs):
+    def __new__(cls, tensor, ptype=Ptype.arithmetic, device=None, *args, meta_size, **kwargs):
         """
         Creates the shared tensor from the input `tensor` provided by party `src`.
         The `ptype` defines the type of sharing used (default: arithmetic).
@@ -138,11 +138,7 @@ class MPCTensor(CrypTensor):
         requires_grad = kwargs.pop("requires_grad", default)
 
         # call CrypTensor constructor:
-        if isinstance(tensor, torch.Tensor):
-            meta = torch.empty(tensor.size(), device='meta')
-        else:
-            print(f"zero meta {tensor}")
-            meta = torch.empty(0, device='meta')
+        meta = torch.empty(meta_size, device='meta')
         self = cls._make_subclass(cls, meta, requires_grad)
 
         if device is None and hasattr(tensor, "device"):
@@ -152,13 +148,24 @@ class MPCTensor(CrypTensor):
 
         # create the MPCTensor:
         tensor_type = ptype.to_tensor()
-        if tensor is []:
-            self._tensor = torch.tensor([], device=device)
+        if tensor == []:
+            self._tensor = None  # catch it
         else:
             self._tensor = tensor_type(tensor=tensor, device=device, *args, **kwargs)
+            assert self._tensor.size() == self.size(), f"{self._tensor.size()} != {self.size()}"
         self.ptype = ptype
 
         return self
+
+    @property
+    def _tensor(self):
+        return self.__tensor
+
+    @_tensor.setter
+    def _tensor(self, x):
+        self.__tensor = x
+        if x is not None:
+            assert self.size() == x.size(), f"{self.size()} != {x.size()}"
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
@@ -170,8 +177,7 @@ class MPCTensor(CrypTensor):
         elif func is A.ones_like:
             self, dtype, layout, device, requires_grad, memory_format = args
             # TODO
-            print(self.share.size())
-            return self.new(torch.ones_like(self.share))
+            return self.new(torch.ones_like(self.share), meta_size=self.size())
         elif func is A.detach:
             # TODO: wut
             return args[0].clone()
@@ -191,7 +197,7 @@ class MPCTensor(CrypTensor):
 
     @staticmethod
     def from_shares(share, precision=None, ptype=Ptype.arithmetic):
-        result = MPCTensor([])
+        result = MPCTensor([], meta_size=share.size())
         from_shares = ptype.to_tensor().from_shares
         result._tensor = from_shares(share, precision=precision)
         result.ptype = ptype
@@ -200,7 +206,7 @@ class MPCTensor(CrypTensor):
     def dispatch_clone(self):
         """Create a deep copy of the input tensor."""
         # TODO: Rename this to __deepcopy__()?
-        result = MPCTensor([])
+        result = MPCTensor([], meta_size=self.size())
         result._tensor = self._tensor.clone()
         result.ptype = self.ptype
         return result
@@ -208,7 +214,7 @@ class MPCTensor(CrypTensor):
     def shallow_copy(self):
         """Create a shallow copy of the input tensor."""
         # TODO: Rename this to __copy__()?
-        result = MPCTensor([])
+        result = MPCTensor([], meta_size=self.size())
         result._tensor = self._tensor
         result.ptype = self.ptype
         return result
@@ -945,8 +951,8 @@ class MPCTensor(CrypTensor):
     def split(self, split_size, dim=0):
         shares = self.share.split(split_size, dim=dim)
         results = tuple(
-            MPCTensor(0, ptype=self.ptype, device=self.device)
-            for _ in range(len(shares))
+            MPCTensor(0, meta_size=s.size(), ptype=self.ptype, device=self.device)
+            for s in shares
         )
         for i in range(len(shares)):
             results[i].share = shares[i]
@@ -1037,8 +1043,10 @@ def _add_oop_binary_passthrough_function(name, preferred=None):
         result = self.shallow_copy()
         if isinstance(value, MPCTensor):
             value = value._tensor
-        result._tensor = getattr(result._tensor, name)(value, *args, **kwargs)
-        return result
+        result_tensor = getattr(result._tensor, name)(value, *args, **kwargs)
+        result2 = MPCTensor([], meta_size=result_tensor.size())
+        result2._tensor = result_tensor
+        return result2
 
     if preferred is None:
         setattr(MPCTensor, f'dispatch_{name}', ob_wrapper_function)

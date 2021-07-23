@@ -160,7 +160,7 @@ def get_cryptensor_type(tensor):
     raise ValueError("Unregistered CrypTensor type: {}".format(type(tensor)))
 
 
-def cryptensor(*args, cryptensor_type=None, **kwargs):
+def cryptensor(tensor, *args, cryptensor_type=None, **kwargs):
     """
     Factory function to return encrypted tensor of given `cryptensor_type`. If no
     `cryptensor_type` is specified, the default type is used.
@@ -173,7 +173,7 @@ def cryptensor(*args, cryptensor_type=None, **kwargs):
         raise ValueError("CrypTensor type %s does not exist." % cryptensor_type)
 
     # create CrypTensor:
-    return __CRYPTENSOR_TYPES__[cryptensor_type](*args, **kwargs)
+    return __CRYPTENSOR_TYPES__[cryptensor_type](tensor, *args, meta_size=tensor.size(), **kwargs)
 
 
 def is_encrypted_tensor(obj):
